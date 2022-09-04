@@ -32,6 +32,7 @@
     - LZ4 source repository : https://github.com/lz4/lz4
 */
 
+#include <stdio.h>
 /*-************************************
 *  Tuning parameters
 **************************************/
@@ -126,7 +127,7 @@
 #  pragma warning(disable : 4127)   /* disable: C4127: conditional expression is constant */
 #  pragma warning(disable : 6237)   /* disable: C6237: conditional expression is always 0 */
 #endif  /* _MSC_VER */
-
+#include <immintrin.h>
 #ifndef LZ4_FORCE_INLINE
 #  ifdef _MSC_VER    /* Visual Studio */
 #    define LZ4_FORCE_INLINE static __forceinline
@@ -1993,36 +1994,76 @@ LZ4_decompress_generic(
         }
 
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
+
+        /* initialize lookahead mask */
+        /* TODO use SHRD */
+        __m256i const runMaskVec =  _mm256_set1_epi8(RUN_MASK << ML_BITS);
+        U64 lookaheadBitMask = ((*ip) >> ML_BITS) == RUN_MASK;
+        const BYTE* prevIp = ip;
         while (1) {
+            __m256i const w0 = _mm256_loadu_si256((__m256i*)(ip + 1));
+            __m256i const w1 = _mm256_and_si256(w0, runMaskVec);
+            __m256i const w2 = _mm256_cmpeq_epi8(w1, runMaskVec);
+
+            U64 const prevSize = ip - prevIp;
+
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
             token = *ip++;
-            length = token >> ML_BITS;  /* literal length */
 
             /* decode literal length */
-            if (length == RUN_MASK) {
-                size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
-                if (addl == rvl_error) { goto _output_error; }
-                length += addl;
-                if (unlikely((uptrval)(op)+length<(uptrval)(op))) { goto _output_error; } /* overflow detection */
-                if (unlikely((uptrval)(ip)+length<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
+            if (likely(prevSize < 32)) {
+                length = token >> ML_BITS;  /* literal length */
+                lookaheadBitMask >>= prevSize;
+                if (lookaheadBitMask & 1) {
+        block1:
 
-                /* copy literals */
-                cpy = op+length;
-                LZ4_STATIC_ASSERT(MFLIMIT >= WILDCOPYLENGTH);
-                if ((cpy>oend-32) || (ip+length>iend-32)) { goto safe_literal_copy; }
-                LZ4_wildCopy32(op, ip, cpy);
-                ip += length; op = cpy;
+                    /* prepare lookahead mask for next iteration */
+                    prevIp = ip;
+                    lookaheadBitMask = _mm256_movemask_epi8(w2);
+
+                    size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+                    if (addl == rvl_error) { goto _output_error; }
+                    length += addl;
+                    if (unlikely((uptrval)(op)+length<(uptrval)(op))) { goto _output_error; } /* overflow detection */
+                    if (unlikely((uptrval)(ip)+length<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
+
+                    /* copy literals */
+                    cpy = op+length;
+                    LZ4_STATIC_ASSERT(MFLIMIT >= WILDCOPYLENGTH);
+                    if ((cpy>oend-32) || (ip+length>iend-32)) { goto safe_literal_copy; }
+                    LZ4_wildCopy32(op, ip, cpy);
+                    ip += length; op = cpy;
+                    goto if_end;
+                } else {
+        block2:
+                    /* prepare lookahead mask for next iteration */
+                    prevIp = ip;
+                    lookaheadBitMask = _mm256_movemask_epi8(w2);
+
+                    cpy = op+length;
+                    DEBUGLOG(7, "copy %u bytes in a 16-bytes stripe", (unsigned)length);
+                    /* We don't need to check oend, since we check it once for each loop below */
+                    if (ip > iend-(16 + 1/*max lit + offset + nextToken*/)) { goto safe_literal_copy; }
+                    /* Literals can only be <= 14, but hope compilers optimize better when copy by a register size */
+                    LZ4_memcpy(op, ip, 16);
+                    ip += length; op = cpy;
+                    goto if_end;
+                }
             } else {
-                cpy = op+length;
-                DEBUGLOG(7, "copy %u bytes in a 16-bytes stripe", (unsigned)length);
-                /* We don't need to check oend, since we check it once for each loop below */
-                if (ip > iend-(16 + 1/*max lit + offset + nextToken*/)) { goto safe_literal_copy; }
-                /* Literals can only be <= 14, but hope compilers optimize better when copy by a register size */
-                LZ4_memcpy(op, ip, 16);
-                ip += length; op = cpy;
+                length = token >> ML_BITS;  /* literal length */
+                if (length == RUN_MASK) {
+                    goto block1;
+                } else {
+                    goto block2;
+                }
             }
+
+
+
+
+        if_end:
 
             /* get offset */
             offset = LZ4_readLE16(ip); ip+=2;
