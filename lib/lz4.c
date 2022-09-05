@@ -1993,11 +1993,11 @@ LZ4_decompress_generic(
         }
 
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
+        token = *ip++;
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
-            token = *ip++;
             length = token >> ML_BITS;  /* literal length */
 
             /* decode literal length */
@@ -2042,11 +2042,15 @@ LZ4_decompress_generic(
                 if (op + length >= oend - FASTLOOP_SAFE_DISTANCE) {
                     goto safe_match_copy;
                 }
+
+                token = *ip++;
             } else {
                 length += MINMATCH;
                 if (op + length >= oend - FASTLOOP_SAFE_DISTANCE) {
                     goto safe_match_copy;
                 }
+
+                token = *ip++;
 
                 /* Fastpath check: skip LZ4_wildCopy32 when true */
                 if ((dict == withPrefix64k) || (match >= lowPrefix)) {
@@ -2107,6 +2111,8 @@ LZ4_decompress_generic(
 
             op = cpy;   /* wildcopy correction */
         }
+        ip--;   /* ip is incremented ahead of each iteration in the fast loop */
+
     safe_decode:
 #endif
 
