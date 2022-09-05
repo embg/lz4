@@ -1997,6 +1997,12 @@ LZ4_decompress_generic(
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
         token = *ip++;
         litLen = token >> ML_BITS;
+        if (litLen == RUN_MASK) {
+            size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+            if (addl == rvl_error) { goto _output_error; }
+            litLen += addl;
+        }
+
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
@@ -2004,14 +2010,10 @@ LZ4_decompress_generic(
 
             matchLen = token & ML_MASK;
 
-            /* decode literal length */
-            if (litLen == RUN_MASK) {
-                size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
-                if (addl == rvl_error) { goto _output_error; }
-                litLen += addl;
+            LZ4_memcpy(op, ip, 16);
+            if (unlikely(litLen > 16)) {
                 if (unlikely((uptrval)(op)+litLen<(uptrval)(op))) { goto _output_error; } /* overflow detection */
                 if (unlikely((uptrval)(ip)+litLen<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
-
                 /* copy literals */
                 cpy = op+litLen;
                 LZ4_STATIC_ASSERT(MFLIMIT >= WILDCOPYLENGTH);
@@ -2019,20 +2021,9 @@ LZ4_decompress_generic(
                     length = litLen;
                     goto safe_literal_copy;
                 }
-                LZ4_wildCopy32(op, ip, cpy);
-                ip += litLen; op = cpy;
-            } else {
-                cpy = op+litLen;
-                DEBUGLOG(7, "copy %u bytes in a 16-bytes stripe", (unsigned)litLen);
-                /* We don't need to check oend, since we check it once for each loop below */
-                if (ip > iend-(16 + 1/*max lit + offset + nextToken*/)) {
-                    length = litLen;
-                    goto safe_literal_copy;
-                }
-                /* Literals can only be <= 14, but hope compilers optimize better when copy by a register size */
-                LZ4_memcpy(op, ip, 16);
-                ip += litLen; op = cpy;
+                LZ4_wildCopy32(op+16, ip+16, cpy);
             }
+            ip += litLen; op += litLen;
 
             /* get offset */
             offset = LZ4_readLE16(ip); ip+=2;
@@ -2055,7 +2046,12 @@ LZ4_decompress_generic(
 
                 token = *ip++;
                 litLen = token >> ML_BITS;  /* literal length */
-            } else {
+                if (litLen == RUN_MASK) {
+                    size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+                    if (addl == rvl_error) { goto _output_error; }
+                    litLen += addl;
+                }
+           } else {
                 matchLen += MINMATCH;
 
                 if (op + matchLen >= oend - FASTLOOP_SAFE_DISTANCE) {
@@ -2065,6 +2061,11 @@ LZ4_decompress_generic(
 
                 token = *ip++;
                 litLen = token >> ML_BITS;  /* literal length */
+                if (litLen == RUN_MASK) {
+                    size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+                    if (addl == rvl_error) { goto _output_error; }
+                    litLen += addl;
+                }
 
                 /* Fastpath check: skip LZ4_wildCopy32 when true */
                 if ((dict == withPrefix64k) || (match >= lowPrefix)) {
