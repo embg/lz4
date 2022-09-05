@@ -1997,6 +1997,12 @@ LZ4_decompress_generic(
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
         token = *ip++;
         litLen = token >> ML_BITS;
+        if (litLen == RUN_MASK) {
+            size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+            if (addl == rvl_error) { goto _output_error; }
+            litLen += addl;
+        }
+
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
@@ -2005,10 +2011,7 @@ LZ4_decompress_generic(
             matchLen = token & ML_MASK;
 
             /* decode literal length */
-            if (litLen == RUN_MASK) {
-                size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
-                if (addl == rvl_error) { goto _output_error; }
-                litLen += addl;
+            if (litLen > 16) {
                 if (unlikely((uptrval)(op)+litLen<(uptrval)(op))) { goto _output_error; } /* overflow detection */
                 if (unlikely((uptrval)(ip)+litLen<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
 
@@ -2055,7 +2058,12 @@ LZ4_decompress_generic(
 
                 token = *ip++;
                 litLen = token >> ML_BITS;  /* literal length */
-            } else {
+                if (litLen == RUN_MASK) {
+                    size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+                    if (addl == rvl_error) { goto _output_error; }
+                    litLen += addl;
+                }
+           } else {
                 matchLen += MINMATCH;
 
                 if (op + matchLen >= oend - FASTLOOP_SAFE_DISTANCE) {
@@ -2065,6 +2073,11 @@ LZ4_decompress_generic(
 
                 token = *ip++;
                 litLen = token >> ML_BITS;  /* literal length */
+                if (litLen == RUN_MASK) {
+                    size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
+                    if (addl == rvl_error) { goto _output_error; }
+                    litLen += addl;
+                }
 
                 /* Fastpath check: skip LZ4_wildCopy32 when true */
                 if ((dict == withPrefix64k) || (match >= lowPrefix)) {
