@@ -2006,9 +2006,10 @@ LZ4_decompress_generic(
 
             /* decode literal length */
             if (litLen == RUN_MASK) {
+                ip += litLen; op += litLen;
                 size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
                 if (addl == rvl_error) { goto _output_error; }
-                litLen += addl;
+                litLen = addl;
                 if (unlikely((uptrval)(op)+litLen<(uptrval)(op))) { goto _output_error; } /* overflow detection */
                 if (unlikely((uptrval)(ip)+litLen<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
 
@@ -2016,7 +2017,8 @@ LZ4_decompress_generic(
                 cpy = op+litLen;
                 LZ4_STATIC_ASSERT(MFLIMIT >= WILDCOPYLENGTH);
                 if ((cpy>oend-32) || (ip+litLen>iend-32)) {
-                    length = litLen;
+                    length = litLen + RUN_MASK;
+                    ip -= RUN_MASK; op -= RUN_MASK;
                     goto safe_literal_copy;
                 }
                 LZ4_wildCopy32(op, ip, cpy);
@@ -2030,7 +2032,6 @@ LZ4_decompress_generic(
                     goto safe_literal_copy;
                 }
                 /* Literals can only be <= 14, but hope compilers optimize better when copy by a register size */
-                LZ4_memcpy(op, ip, 16);
                 ip += litLen; op = cpy;
             }
 
@@ -2077,6 +2078,8 @@ LZ4_decompress_generic(
                         LZ4_memcpy(op+8, match+8, 8);
                         LZ4_memcpy(op+16, match+16, 2);
                         op += matchLen;
+
+                        LZ4_memcpy(op, ip, 16);
                         continue;
             }   }   }
 
@@ -2111,6 +2114,7 @@ LZ4_decompress_generic(
                         LZ4_memcpy(op, lowPrefix, restSize);
                         op += restSize;
                 }   }
+                LZ4_memcpy(op, ip, 16);
                 continue;
             }
 
@@ -2125,6 +2129,7 @@ LZ4_decompress_generic(
             }
 
             op = cpy;   /* wildcopy correction */
+            LZ4_memcpy(op, ip, 16);
         }
         ip--; /* undo the pipeline for the slow loop */
     safe_decode:
