@@ -1968,6 +1968,8 @@ LZ4_decompress_generic(
         const BYTE* match;
         size_t offset;
         unsigned token;
+        size_t matchLen;
+        size_t litLen;
         size_t length;
 
 
@@ -1993,35 +1995,43 @@ LZ4_decompress_generic(
         }
 
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
+        token = *ip++;
+        litLen = token >> ML_BITS;
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
-            token = *ip++;
-            length = token >> ML_BITS;  /* literal length */
+
+            matchLen = token & ML_MASK;
 
             /* decode literal length */
-            if (length == RUN_MASK) {
+            if (litLen == RUN_MASK) {
                 size_t const addl = read_variable_length(&ip, iend-RUN_MASK, 1);
                 if (addl == rvl_error) { goto _output_error; }
-                length += addl;
-                if (unlikely((uptrval)(op)+length<(uptrval)(op))) { goto _output_error; } /* overflow detection */
-                if (unlikely((uptrval)(ip)+length<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
+                litLen += addl;
+                if (unlikely((uptrval)(op)+litLen<(uptrval)(op))) { goto _output_error; } /* overflow detection */
+                if (unlikely((uptrval)(ip)+litLen<(uptrval)(ip))) { goto _output_error; } /* overflow detection */
 
                 /* copy literals */
-                cpy = op+length;
+                cpy = op+litLen;
                 LZ4_STATIC_ASSERT(MFLIMIT >= WILDCOPYLENGTH);
-                if ((cpy>oend-32) || (ip+length>iend-32)) { goto safe_literal_copy; }
+                if ((cpy>oend-32) || (ip+litLen>iend-32)) {
+                    length = litLen;
+                    goto safe_literal_copy;
+                }
                 LZ4_wildCopy32(op, ip, cpy);
-                ip += length; op = cpy;
+                ip += litLen; op = cpy;
             } else {
-                cpy = op+length;
-                DEBUGLOG(7, "copy %u bytes in a 16-bytes stripe", (unsigned)length);
+                cpy = op+litLen;
+                DEBUGLOG(7, "copy %u bytes in a 16-bytes stripe", (unsigned)litLen);
                 /* We don't need to check oend, since we check it once for each loop below */
-                if (ip > iend-(16 + 1/*max lit + offset + nextToken*/)) { goto safe_literal_copy; }
+                if (ip > iend-(16 + 1/*max lit + offset + nextToken*/)) {
+                    length = litLen;
+                    goto safe_literal_copy;
+                }
                 /* Literals can only be <= 14, but hope compilers optimize better when copy by a register size */
                 LZ4_memcpy(op, ip, 16);
-                ip += length; op = cpy;
+                ip += litLen; op = cpy;
             }
 
             /* get offset */
@@ -2030,23 +2040,31 @@ LZ4_decompress_generic(
             assert(match <= op);  /* overflow check */
 
             /* get matchlength */
-            length = token & ML_MASK;
-
-            if (length == ML_MASK) {
+            if (matchLen == ML_MASK) {
                 size_t const addl = read_variable_length(&ip, iend - LASTLITERALS + 1, 0);
                 if (addl == rvl_error) { goto _output_error; }
-                length += addl;
-                length += MINMATCH;
-                if (unlikely((uptrval)(op)+length<(uptrval)op)) { goto _output_error; } /* overflow detection */
+                matchLen += addl;
+                matchLen += MINMATCH;
+
+                if (unlikely((uptrval)(op)+matchLen<(uptrval)op)) { goto _output_error; } /* overflow detection */
                 if ((checkOffset) && (unlikely(match + dictSize < lowPrefix))) { goto _output_error; } /* Error : offset outside buffers */
-                if (op + length >= oend - FASTLOOP_SAFE_DISTANCE) {
+                if (op + matchLen >= oend - FASTLOOP_SAFE_DISTANCE) {
+                    length = matchLen;
                     goto safe_match_copy;
                 }
+
+                token = *ip++;
+                litLen = token >> ML_BITS;  /* literal length */
             } else {
-                length += MINMATCH;
-                if (op + length >= oend - FASTLOOP_SAFE_DISTANCE) {
+                matchLen += MINMATCH;
+
+                if (op + matchLen >= oend - FASTLOOP_SAFE_DISTANCE) {
+                    length = matchLen;
                     goto safe_match_copy;
                 }
+
+                token = *ip++;
+                litLen = token >> ML_BITS;  /* literal length */
 
                 /* Fastpath check: skip LZ4_wildCopy32 when true */
                 if ((dict == withPrefix64k) || (match >= lowPrefix)) {
@@ -2058,30 +2076,31 @@ LZ4_decompress_generic(
                         LZ4_memcpy(op, match, 8);
                         LZ4_memcpy(op+8, match+8, 8);
                         LZ4_memcpy(op+16, match+16, 2);
-                        op += length;
+                        op += matchLen;
                         continue;
             }   }   }
+
 
             if (checkOffset && (unlikely(match + dictSize < lowPrefix))) { goto _output_error; } /* Error : offset outside buffers */
             /* match starting within external dictionary */
             if ((dict==usingExtDict) && (match < lowPrefix)) {
                 assert(dictEnd != NULL);
-                if (unlikely(op+length > oend-LASTLITERALS)) {
+                if (unlikely(op+matchLen > oend-LASTLITERALS)) {
                     if (partialDecoding) {
                         DEBUGLOG(7, "partialDecoding: dictionary match, close to dstEnd");
-                        length = MIN(length, (size_t)(oend-op));
+                        matchLen = MIN(matchLen, (size_t)(oend-op));
                     } else {
                         goto _output_error;  /* end-of-block condition violated */
                 }   }
 
-                if (length <= (size_t)(lowPrefix-match)) {
+                if (matchLen <= (size_t)(lowPrefix-match)) {
                     /* match fits entirely within external dictionary : just copy */
-                    LZ4_memmove(op, dictEnd - (lowPrefix-match), length);
-                    op += length;
+                    LZ4_memmove(op, dictEnd - (lowPrefix-match), matchLen);
+                    op += matchLen;
                 } else {
                     /* match stretches into both external dictionary and current block */
                     size_t const copySize = (size_t)(lowPrefix - match);
-                    size_t const restSize = length - copySize;
+                    size_t const restSize = matchLen - copySize;
                     LZ4_memcpy(op, dictEnd - copySize, copySize);
                     op += copySize;
                     if (restSize > (size_t)(op - lowPrefix)) {  /* overlap copy */
@@ -2096,7 +2115,7 @@ LZ4_decompress_generic(
             }
 
             /* copy match within block */
-            cpy = op + length;
+            cpy = op + matchLen;
 
             assert((op <= oend) && (oend-op >= 32));
             if (unlikely(offset<16)) {
@@ -2107,6 +2126,7 @@ LZ4_decompress_generic(
 
             op = cpy;   /* wildcopy correction */
         }
+        ip--; /* undo the pipeline for the slow loop */
     safe_decode:
 #endif
 
