@@ -2021,7 +2021,7 @@ LZ4_decompress_generic(
                 }
                 LZ4_wildCopy32(op, ip, cpy);
                 ip += litLen; op = cpy;
-            } else {
+            } else if (litLen > 0) {
                 cpy = op+litLen;
                 DEBUGLOG(7, "copy %u bytes in a 16-bytes stripe", (unsigned)litLen);
                 /* We don't need to check oend, since we check it once for each loop below */
