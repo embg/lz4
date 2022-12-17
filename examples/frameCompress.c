@@ -10,7 +10,7 @@
 #include <string.h>
 #include <errno.h>
 #include <assert.h>
-
+#define LZ4F_STATIC_LINKING_ONLY
 #include <lz4frame.h>
 
 
@@ -200,7 +200,12 @@ decompress_file_internal(FILE* f_in, FILE* f_out,
             /* Any data within dst has been flushed at this stage */
             size_t dstSize = dstCapacity;
             size_t srcSize = (const char*)srcEnd - (const char*)srcPtr;
-            ret = LZ4F_decompress(dctx, dst, &dstSize, srcPtr, &srcSize, /* LZ4F_decompressOptions_t */ NULL);
+            const char* fooDict = "";
+
+            LZ4F_decompressOptions_t opts;
+            memset(&opts, 0, sizeof(opts));
+            opts.stableDst = 0;
+            ret = LZ4F_decompress_usingDict(dctx, dst, &dstSize, srcPtr, &srcSize, &fooDict, 0, /* LZ4F_decompressOptions_t */ &opts);
             if (LZ4F_isError(ret)) {
                 printf("Decompression error: %s\n", LZ4F_getErrorName(ret));
                 return 1;
@@ -343,7 +348,7 @@ int main(int argc, const char **argv) {
     printf("dec = [%s]\n", decFilename);
 
     /* compress */
-    {   FILE* const inpFp = fopen(inpFilename, "rb");
+    /*{   FILE* const inpFp = fopen(inpFilename, "rb");
         FILE* const outFp = fopen(lz4Filename, "wb");
 
         printf("compress : %s -> %s\n", inpFilename, lz4Filename);
@@ -358,16 +363,16 @@ int main(int argc, const char **argv) {
         }
         printf("%s: %zu → %zu bytes, %.1f%%\n",
             inpFilename,
-            (size_t)ret.size_in, (size_t)ret.size_out,  /* might overflow is size_t is 32 bits and size_{in,out} > 4 GB */
+            (size_t)ret.size_in, (size_t)ret.size_out,
             (double)ret.size_out / ret.size_in * 100);
         printf("compress : done\n");
-    }
+    } */
 
     /* decompress */
-    {   FILE* const inpFp = fopen(lz4Filename, "rb");
+    {   FILE* const inpFp = fopen(inpFilename, "rb");
         FILE* const outFp = fopen(decFilename, "wb");
 
-        printf("decompress : %s -> %s\n", lz4Filename, decFilename);
+        printf("decompress : %s -> %s\n", inpFilename, decFilename);
         int const ret = decompress_file(inpFp, outFp);
 
         fclose(outFp);
@@ -381,7 +386,7 @@ int main(int argc, const char **argv) {
     }
 
     /* verify */
-    {   FILE* const inpFp = fopen(inpFilename, "rb");
+    /*{   FILE* const inpFp = fopen(inpFilename, "rb");
         FILE* const decFp = fopen(decFilename, "rb");
 
         printf("verify : %s <-> %s\n", inpFilename, decFilename);
@@ -395,7 +400,7 @@ int main(int argc, const char **argv) {
             return cmp;
         }
         printf("verify : OK\n");
-    }
+    }*/
 
     return 0;
 }
