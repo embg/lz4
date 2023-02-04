@@ -1939,6 +1939,8 @@ read_variable_length(const BYTE** ip, const BYTE* ilimit,
     return length;
 }
 
+#include <stdlib.h>
+
 /*! LZ4_decompress_generic() :
  *  This generic decompression function covers all use cases.
  *  It shall be instantiated several times, using different sets of directives.
@@ -1980,8 +1982,27 @@ LZ4_decompress_generic(
         const BYTE* match;
         size_t offset;
         unsigned token;
+        unsigned nextToken;
         size_t length;
 
+        BYTE* tokBuf = (BYTE*)malloc(srcSize);
+        for (int i = 0; i < srcSize; i++) {
+            size_t litLen = src[i] >> ML_BITS;
+            if (litLen == RUN_MASK) {
+                const BYTE* ip = src + i + 1;
+                litLen += read_variable_length(&ip, iend, 1);
+            }
+            size_t matchLen = token & ML_MASK;
+            if (matchLen == ML_MASK) {
+                while (1) {
+                    /* Add up the number of 0xFF bytes */
+                }
+            }
+            if (i + length < srcSize) {
+                tokBuf[i] = src[i + length];
+            }
+        }
+        const BYTE* tp = tokBuf;
 
         DEBUGLOG(5, "LZ4_decompress_generic (srcSize:%i, dstSize:%i)", srcSize, outputSize);
 
@@ -2006,10 +2027,12 @@ LZ4_decompress_generic(
 
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
         DEBUGLOG(6, "using fast decode loop");
+        token = *ip;
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
+            ip++; tp++;
             token = *ip++;
             length = token >> ML_BITS;  /* literal length */
 
