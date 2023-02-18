@@ -1986,23 +1986,25 @@ LZ4_decompress_generic(
         size_t length;
 
         BYTE* tokBuf = (BYTE*)malloc(srcSize);
+        /* TODO move into a non-inline function */
         for (int i = 0; i < srcSize; i++) {
-            size_t litLen = src[i] >> ML_BITS;
+            const BYTE* ip = src + i;
+            const BYTE token = *(ip++);
+            size_t litLen = token >> ML_BITS;
             if (litLen == RUN_MASK) {
                 const BYTE* ip = src + i + 1;
                 litLen += read_variable_length(&ip, iend, 1);
             }
-            size_t matchLen = token & ML_MASK;
+            ip += litLen;
+            ip += 2;
+            const size_t matchLen = token & ML_MASK;
             if (matchLen == ML_MASK) {
-                while (1) {
-                    /* Add up the number of 0xFF bytes */
-                }
+                read_variable_length(&ip, iend - LASTLITERALS + 1, 1);
             }
-            if (i + length < srcSize) {
-                tokBuf[i] = src[i + length];
+            if (ip < iend) {
+                tokBuf[i] = *ip;
             }
         }
-        const BYTE* tp = tokBuf;
 
         DEBUGLOG(5, "LZ4_decompress_generic (srcSize:%i, dstSize:%i)", srcSize, outputSize);
 
@@ -2027,13 +2029,13 @@ LZ4_decompress_generic(
 
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
         DEBUGLOG(6, "using fast decode loop");
-        token = *ip;
+        nextToken = *ip;
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
-            ip++; tp++;
-            token = *ip++;
+            token = nextToken;
+            nextToken = tokBuf[ip - (const BYTE*) src];
             length = token >> ML_BITS;  /* literal length */
 
             /* decode literal length */
