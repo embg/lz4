@@ -1940,6 +1940,8 @@ read_variable_length(const BYTE** ip, const BYTE* ilimit,
 }
 
 #include <stdlib.h>
+#include <stdio.h>
+#include <assert.h>
 
 /*! LZ4_decompress_generic() :
  *  This generic decompression function covers all use cases.
@@ -2034,8 +2036,15 @@ LZ4_decompress_generic(
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
-            token = nextToken;
+            token = *ip;
+            if (token != nextToken) {
+                printf("whats going on! diff: %zu \n\n", (size_t)(ip - (const BYTE*)src));
+                assert(0);
+            } else {
+                printf("it works! diff: %zu \n\n", (size_t)(ip - (const BYTE*)src));
+            }
             nextToken = tokBuf[ip - (const BYTE*) src];
+            ip++;
             length = token >> ML_BITS;  /* literal length */
 
             /* decode literal length */
