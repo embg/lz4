@@ -2008,7 +2008,6 @@ LZ4_decompress_generic(
 
         BYTE* tokBuf = (BYTE*)malloc(srcSize);
         fillTokBuf(src, srcSize, tokBuf);
-        const BYTE* tp = tokBuf;
 
         DEBUGLOG(5, "LZ4_decompress_generic (srcSize:%i, dstSize:%i)", srcSize, outputSize);
 
@@ -2033,14 +2032,11 @@ LZ4_decompress_generic(
 
         /* Fast loop : decode sequences as long as output < oend-FASTLOOP_SAFE_DISTANCE */
         DEBUGLOG(6, "using fast decode loop");
-        nextToken = *ip;
         while (1) {
             /* Main fastloop assertion: We can always wildcopy FASTLOOP_SAFE_DISTANCE */
             assert(oend - op >= FASTLOOP_SAFE_DISTANCE);
             assert(ip < iend);
-            token = nextToken;
-            nextToken = *(tp + (ip - (const BYTE*)src));
-            ip++;
+            token = *(ip++);
             length = token >> ML_BITS;  /* literal length */
 
             /* decode literal length */
